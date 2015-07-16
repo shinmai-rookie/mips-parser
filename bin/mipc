@@ -1,0 +1,226 @@
+#!/bin/sh
+# MIPC: MIPS assembler compiler
+# mipc: Script to carry the whole process of compiling
+# Copyright (C) 2015  Jaime Mosquera
+#
+# MIPC is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version.
+#
+# MIPC is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+# A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# MIPC.  If not, see <http://www.gnu.org/licenses/>.
+
+function show_help()
+{
+    EXEC_NAME="`basename \"$1\"`"
+    cat << __HELP__
+${EXEC_NAME} -[cCmp] [-o OUTPUT_FILE] [-f] INPUT_FILE
+    -c | --compile: Compile the assembler source file into a MIPS binary file
+    -C | --clean: Remove the previously generated files (without creating any)
+    -m | --m4[ize]: Convert the MIPS source file into an m4 script
+    -p | --process[-m4]: Process a previously generated MIPS-m4 script
+
+    -f | --file=INPUT_FILE: Perform the chosen action (except clean) upon this
+                  file
+    -o | --output[-file]=OUTPUT_FILE: Keep the final result in OUTPUT_FILE
+
+    -k | --keep: Do not delete the generated files
+    -h | --help: Show this message
+
+NOTE: Short and long options are equivalent. For options that accept an
+  argument (p.e., the hypothetical option -x|--example), all these options are
+  equivalent:
+    -x file.x
+    -x=file.x
+    --example file.x
+    --example=file.x
+ 
+MIPC  Copyright (C) 2015  Jaime Mosquera
+MIPC comes with ABSOLUTELY NO WARRANTY; for details, read the LICENSE.
+MIPC is free software, and you are welcome to redistribute it under certain
+conditions; again, read LICENSE for details.
+__HELP__
+
+    exit
+}
+
+# With no options, show a help message
+if test "x$1" = "x"
+then
+    show_help $0
+fi
+
+# Many files are assumed to be in the subdirectory bin/ or lib/ inside the
+# directory where mipc is
+EXECUTABLE_PATH="`which \"$0\"`"
+BASE_DIRECTORY="`dirname \"${EXECUTABLE_PATH}\"`/.."
+
+ACTION="Compile"
+INPUT_FILE=""
+OUTPUT_FILE="" 
+
+while test $# -ge 1
+do
+    ARGUMENT="$1"
+
+    case "${ARGUMENT}" in
+        -h|--help)
+            show_help $0
+            ;;
+
+        -c|--compile)
+            ACTION="Compile"
+            ;;
+
+        -m|--m4|--m4ize)
+            ACTION="m4"
+            ;;
+
+        -p|--process|--process-m4)
+            ACTION="Process"
+            ;;
+
+        -C|--clean)
+            ACTION="Clean"
+            ;;
+
+        -k|--keep)
+            KEEP_FILES="True"
+            ;;
+
+        -f|--file)
+            INPUT_FILE="$2"
+            shift
+            ;;
+
+        -f=*|--file=*)
+            INPUT_FILE="${ARGUMENT##-}"
+            INPUT_FILE="${INPUT_FILE##-}"
+            INPUT_FILE="${INPUT_FILE##f}"
+            INPUT_FILE="${INPUT_FILE##ile}"
+            INPUT_FILE="${INPUT_FILE##=}"
+            ;;
+
+        -o|--output|--output-file)
+            OUTPUT_FILE="$2"
+            shift
+            ;;
+
+        -o=*|--output=*|--output-file=*)
+            OUTPUT_FILE="${ARGUMENT##-}"
+            OUTPUT_FILE="${OUTPUT_FILE##-}"
+            OUTPUT_FILE="${OUTPUT_FILE##o}"
+            OUTPUT_FILE="${OUTPUT_FILE##utput}"
+            OUTPUT_FILE="${OUTPUT_FILE##-file}"
+            OUTPUT_FILE="${OUTPUT_FILE##=}"
+            ;;
+
+        -x | -x=* | --example | --example=*)
+            echo "This option was just intended as an example :)"
+            exit
+            ;;
+
+        --)
+            ;;
+
+        -*)
+            echo "Incorrect option: ${ARGUMENT}"
+            ;;
+
+        *)
+            INPUT_FILE="${ARGUMENT}"
+            ;;
+    esac
+    shift
+done
+
+
+if test "x${INPUT_FILE}" = "x" && test "x${ACTION}" != "xClean"
+then
+    echo "No input files"
+    exit
+fi
+
+# The directory where the input file is
+INPUT_FILE_DIRECTORY="`dirname \"${INPUT_FILE}\"`"
+
+# The name of the input file, without extension or path
+INPUT_FILE_BASE="`basename \"${INPUT_FILE}\"`"
+INPUT_FILE_BASE="${INPUT_FILE_BASE%%.*}"
+
+# The root file whence the next two come
+# This is the first M4 script, directly generated from the assembly one;
+# not suitable "per se" for either calculating addresses or generating code
+PREPROCESSED_FILE="prep_${INPUT_FILE_BASE}.m4"
+
+# With this file we calculate addresses and allocations and run the next file
+if test "x${ACTION}" != "xProcess"
+then
+    MAIN_M4_FILE="${INPUT_FILE_BASE}.m4"
+else
+    MAIN_M4_FILE="${INPUT_FILE}"
+fi
+
+# This file is where the tags are resolved and the actual binary code is
+# generated
+M4_SOURCE_FILE="_${INPUT_FILE_BASE}.m4"
+
+# This is a text file with only 0 and 1, representing the binary code of the
+# final executable
+BINARY_FILE="bin_${INPUT_FILE_BASE}.txt"
+
+
+# The default output file is input.mips (supposing the output file is input.s)
+if test "x${OUTPUT_FILE}" = "x"
+then
+    OUTPUT_FILE="${INPUT_FILE_BASE}.mips"
+fi
+
+# If the user requests either compile or generate m4 scripts from the assembly
+# file, generate those m4 scripts from the input file
+if test "x${ACTION}" = "xCompile" || test "x${ACTION}" = "xm4"
+then
+    sed -f "${BASE_DIRECTORY}/bin/preprocess.sed" < "${INPUT_FILE}" > "${PREPROCESSED_FILE}" || exit
+
+    echo "include(\`lib/mips-lib.m4')dnl" > "${M4_SOURCE_FILE}"
+    cat  "${PREPROCESSED_FILE}" >> "${M4_SOURCE_FILE}"
+
+    echo "include(\`${BASE_DIRECTORY}/lib/mips-count-pc.m4')dnl" > "${MAIN_M4_FILE}"
+    echo "divert(-1)" >> "${MAIN_M4_FILE}"
+    cat  "${PREPROCESSED_FILE}" >> "${MAIN_M4_FILE}"
+    echo "divert(0)dnl" >> "${MAIN_M4_FILE}"
+    echo "include(\`${M4_SOURCE_FILE}')dnl" >> "${MAIN_M4_FILE}"
+fi
+
+# If the user only requests to create m4 scripts from the original file and
+# gives the path of an m4 script file, move the m4 script to that path
+if test "x${ACTION}" = "xm4" && test "x${OUTPUT_FILE%%.mips}" = "${OUTPUT_FILE}"
+then
+    mv "${MAIN_M4_FILE}" "${OUTPUT_FILE}"
+fi
+
+# If the user requests either compile or process, convert the m4 script into a
+# binary file, and then convert it into the final executable
+if test "x${ACTION}" = "xCompile" || test "x${ACTION}" = "xProcess"
+then
+    m4 "${MAIN_M4_FILE}" > "${BINARY_FILE}" || exit
+    sed -f "${BASE_DIRECTORY}/bin/bintoascii.sed" < "${BINARY_FILE}" > "${OUTPUT_FILE}" || exit
+fi
+
+# If the user does not want to keep the intermediate files, remove them
+if test "x${KEEP_FILES}" = "x"
+then
+    rm -rf "${PREPROCESSED_FILE}" "${MAIN_M4_FILE}" "${M4_SOURCE_FILE}" "${BINARY_FILE}"
+fi
+
+# If the user wants to delete all m4 scripts and created binary files, remove
+# them (NOTE: .mips executable files must be deleted by hand)
+if test "x${ACTION}" = "xClean"
+then
+    rm -rf "${BASE_DIRECTORY}"/*.m4 "${BASE_DIRECTORY}"/bin_*.txt
+fi
